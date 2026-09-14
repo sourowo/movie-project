@@ -168,6 +168,7 @@ footer p+p{margin-top:8px}
   <section id="paneList" class="hide">
     <div id="plan"></div>
   </section>
+
   <footer>
     <p>場次資料來源：<a href="https://www.atmovies.com.tw/"
        target="_blank" rel="noopener">開眼電影網</a>
@@ -176,7 +177,7 @@ footer p+p{margin-top:8px}
        個人非營利專案，原始碼在
        <a href="https://github.com/sourowo/movie-project"
           target="_blank" rel="noopener">GitHub</a>。</p>
-    <p style="opacity:.6">版本 2026-09-15b</p>
+    <p style="opacity:.6">版本 2026-09-15c</p>
   </footer>
 </div>
 
@@ -192,6 +193,11 @@ footer p+p{margin-top:8px}
 /* ============================================================
    設定
    ============================================================ */
+
+// 資料來源：GitHub Release 的附加檔案
+const REPO       = "sourowo/movie-project";   // owner/repo
+const ASSET_NAME = "showtimes.json";          // Release 裡的檔名
+const REPO_BRANCH = "main";                   // 備援用：repo 主分支
 
 // 同一間影城，兩場之間至少要留幾分鐘（走出廳、上廁所、再進場）
 const BUFFER_SAME = 15;
@@ -297,18 +303,36 @@ function checkPair(a, b){
 
 
 /* ============================================================
+   兩種跳脫，用途完全不同，名字一定要分開
+   ============================================================
+   icsEsc  → 寫進 .ics 檔用（分號、逗號、反斜線要加 \）
+   htmlEsc → 塞進 HTML 用（< > & " 要換成實體）
+
+   （舊版兩個都叫 esc，後定義的把前面蓋掉，
+     結果匯出的行事曆沒做 ics 跳脫，片名有逗號就會壞。）
+============================================================ */
+
+// .ics 專用
+function icsEsc(t){
+  return String(t||"")
+    .replace(/\\/g,"\\\\").replace(/;/g,"\\;")
+    .replace(/,/g,"\\,").replace(/\r?\n/g,"\\n");
+}
+
+// HTML 專用
+function htmlEsc(t){
+  return String(t==null?"":t)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+
+/* ============================================================
    匯出 .ics（行事曆檔）
    ============================================================
    時間一律轉成 UTC 並加上 Z 結尾，這是最不會出錯的寫法，
    Google 日曆、iPhone 行事曆、Outlook 都認得。
 ============================================================ */
-
-// 這些符號在 ics 裡有特殊意義，要加反斜線
-function esc(t){
-  return String(t||"")
-    .replace(/\\/g,"\\\\").replace(/;/g,"\\;")
-    .replace(/,/g,"\\,").replace(/\r?\n/g,"\\n");
-}
 
 // Date → "20260916T062500Z"
 function utc(d){
@@ -319,19 +343,18 @@ function utc(d){
 
 // ics 規定每行不能超過 75 個位元組，太長要折行（下一行開頭放一個空格）
 function fold(line){
-  const bytes = new TextEncoder().encode(line);
-  if(bytes.length <= 75) return line;
+  const enc = new TextEncoder();
+  if(enc.encode(line).length <= 75) return line;
 
   const out = [];
-  let cur = "", curLen = 0, limit = 75;
+  let cur = "", curLen = 0;
 
   for(const ch of line){
-    const n = new TextEncoder().encode(ch).length;
-    if(curLen + n > limit){
+    const n = enc.encode(ch).length;
+    if(curLen + n > 75){
       out.push(cur);
       cur = " " + ch;            // 續行前面要加一個空格
       curLen = 1 + n;
-      limit = 75;
     }else{
       cur += ch; curLen += n;
     }
@@ -370,18 +393,18 @@ function buildIcs(list){
       `DTSTAMP:${now}`,
       `DTSTART:${utc(start)}`,
       `DTEND:${utc(end)}`,
-      fold(`SUMMARY:${esc(s.movie)}`),
-      fold(`LOCATION:${esc(s.cinema)}`),
-      fold(`DESCRIPTION:${esc(desc)}`),
+      fold(`SUMMARY:${icsEsc(s.movie)}`),
+      fold(`LOCATION:${icsEsc(s.cinema)}`),
+      fold(`DESCRIPTION:${icsEsc(desc)}`),
     );
-    if(s.movie_url) L.push(fold(`URL:${s.movie_url}`));
+    if(s.movie_url) L.push(fold(`URL:${icsEsc(s.movie_url)}`));
 
     // 開演前 30 分鐘提醒
     L.push(
       "BEGIN:VALARM",
       "ACTION:DISPLAY",
       "TRIGGER:-PT30M",
-      fold(`DESCRIPTION:${esc(s.movie)} 快開演了`),
+      fold(`DESCRIPTION:${icsEsc(s.movie)} 快開演了`),
       "END:VALARM",
       "END:VEVENT",
     );
@@ -414,14 +437,6 @@ const $ = id => document.getElementById(id);
 
 function uniq(arr){ return [...new Set(arr)].sort(); }
 
-// 片名、影城名可能含有 < > & " 這些字元，
-// 直接塞進 HTML 會把版面弄壞，所以要先換成安全寫法。
-function esc(t){
-  return String(t==null?"":t)
-    .replace(/&/g,"&amp;").replace(/</g,"&lt;")
-    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-}
-
 function fillSelect(el, values, labelFn, allLabel){
   const keep = el.value;
 
@@ -430,7 +445,7 @@ function fillSelect(el, values, labelFn, allLabel){
   // 之後改了顯示文字，值也會跟著變，篩選就會對不上。
   el.innerHTML = `<option value="">${allLabel}</option>` +
     values.map(v =>
-      `<option value="${esc(v)}">${esc(labelFn ? labelFn(v) : v)}</option>`
+      `<option value="${htmlEsc(v)}">${htmlEsc(labelFn ? labelFn(v) : v)}</option>`
     ).join("");
 
   if(values.includes(keep)) el.value = keep;
@@ -472,9 +487,9 @@ function currentResults(){
 }
 
 function badgeHtml(s){
-  const fmt = (s.formats||[]).map(v => `<span class="tag fmt">${esc(v)}</span>`);
+  const fmt = (s.formats||[]).map(v => `<span class="tag fmt">${htmlEsc(v)}</span>`);
   const oth = [].concat(s.halls||[], s.languages||[], s.events||[])
-                .map(v => `<span class="tag">${esc(v)}</span>`);
+                .map(v => `<span class="tag">${htmlEsc(v)}</span>`);
   const all = fmt.concat(oth);
   return all.length ? `<div class="tags">${all.join("")}</div>` : "";
 }
@@ -496,14 +511,14 @@ function renderResults(){
     const on = picks.has(keyOf(s)) ? "1" : "0";
     const end = s.end_estimated ? hhmm(toDate(s.end_estimated)) : "";
     return `
-    <button class="row" data-picked="${on}" data-key="${esc(keyOf(s))}">
+    <button class="row" data-picked="${on}" data-key="${htmlEsc(keyOf(s))}">
       <span class="mark">✓</span>
       <span class="when num">${hhmm(toDate(s.start))}
         <span style="display:block;font-size:11.5px;font-weight:400;color:var(--muted)">
           ${end ? "～"+end : ""}</span></span>
       <span class="body">
-        <span class="title">${esc(s.movie)}</span>
-        <span class="meta">${dayLabel(s.actual_date||s.date)}　${esc(s.cinema)}</span>
+        <span class="title">${htmlEsc(s.movie)}</span>
+        <span class="meta">${dayLabel(s.actual_date||s.date)}　${htmlEsc(s.cinema)}</span>
         ${badgeHtml(s)}
       </span>
     </button>`;
@@ -564,7 +579,7 @@ function renderPlan(){
         const r = checkPair(day[i-1], s);
         const cls = r.level === "ok" ? "" : (r.level === "bad" ? "bad" : "warn");
         html += `<div class="gap ${cls}"><span class="rail"></span>
-                 <span class="txt">${r.text}</span></div>`;
+                 <span class="txt">${htmlEsc(r.text)}</span></div>`;
       }
 
       const end = s.end_estimated ? hhmm(toDate(s.end_estimated)) : "";
@@ -575,11 +590,11 @@ function renderPlan(){
         <div class="rail num">${hhmm(toDate(s.start))}
           <span class="end">${end ? "～"+end : ""}</span></div>
         <div class="card">
-          <div class="title">${esc(s.movie)}</div>
-          <div class="meta">${esc(s.cinema)}${
-            badges.length ? "　"+badges.join("、") : ""}${
+          <div class="title">${htmlEsc(s.movie)}</div>
+          <div class="meta">${htmlEsc(s.cinema)}${
+            badges.length ? "　"+htmlEsc(badges.join("、")) : ""}${
             s.runtime_minutes ? "　"+s.runtime_minutes+" 分鐘" : ""}</div>
-          <button class="drop" data-key="${esc(keyOf(s))}">移除</button>
+          <button class="drop" data-key="${htmlEsc(keyOf(s))}">移除</button>
         </div>
       </div>`;
     });
@@ -659,47 +674,108 @@ $("fText").addEventListener("input", renderResults);
 
 
 /* ============================================================
-   開始：載入資料
-   ============================================================ */
+   載入資料：GitHub Release
+   ============================================================
+   為什麼不直接 fetch
+     https://github.com/OWNER/REPO/releases/latest/download/xxx.json
+   ？那個網址是「網頁跳轉頁」，github.com 沒有給 CORS 標頭，
+   瀏覽器裡的 fetch 會直接被擋掉（在瀏覽器網址列貼上倒是會下載）。
 
-fetch("https://github.com/sourowo/movie-project/releases/latest/download/showtimes.json")
-  .then(r => {
-    if(!r.ok) throw new Error("讀不到資料（" + r.status + "）");
-    return r.json();
-  })
-  .then(data => {
-    ALL = data;
+   正確做法：
+     1. 打 GitHub API 問「最新的 Release 是哪一個」
+        api.github.com 有 CORS 標頭，可以 fetch。
+     2. 從回傳的 assets 找出檔名相符的那一個，
+        用它的 browser_download_url 下載
+        （最後會導到 objects.githubusercontent.com，也有 CORS）。
 
-    // 舊資料沒有 start 欄位的話，臨時補一個，畫面才不會壞掉
-    ALL.forEach(s => {
-      if(!s.start) s.start = `${s.date}T${s.time}:00+08:00`;
-    });
+   API 未登入時每小時限 60 次，一般使用綽綽有餘。
+   萬一真的被限流，下面還有一個 jsDelivr 的備援路線，
+   讀 repo 裡的同名檔案。
+============================================================ */
 
-    const days = [...new Set(ALL.map(s => s.actual_date || s.date))].sort();
-    $("dataInfo").textContent =
-      `${ALL.length.toLocaleString()} 場　`+
-      `${dayLabel(days[0])} ～ ${dayLabel(days[days.length-1])}`;
+async function fetchFromRelease(){
+  const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+    headers: { "Accept": "application/vnd.github+json" }
+  });
+  if(!r.ok) throw new Error(`GitHub API ${r.status}`);
 
-    // 預設選今天，沒有今天就選第一天
-    //
-    // 注意：不能用 toISOString()，那是 UTC 時間，
-    // 台灣清晨 8 點前會算成「昨天」。
-    // 這裡明確指定用台灣時區來判斷今天是幾號。
-    const today = new Intl.DateTimeFormat("en-CA",
-      { timeZone:"Asia/Taipei" }).format(new Date());
-    buildFilters();
-    $("fDate").value = days.includes(today) ? today : days[0];
-    refreshDependent();
+  const rel = await r.json();
+  const asset = (rel.assets || []).find(a => a.name === ASSET_NAME);
+  if(!asset) throw new Error(`Release「${rel.tag_name}」裡沒有 ${ASSET_NAME}`);
 
-    renderResults();
-    renderDock();
-  })
+  const f = await fetch(asset.browser_download_url);
+  if(!f.ok) throw new Error(`下載失敗 ${f.status}`);
+
+  return { data: await f.json(), from: `Release ${rel.tag_name}` };
+}
+
+// 備援：直接讀 repo 裡的檔案（走 jsDelivr CDN，有 CORS）
+async function fetchFromRepo(){
+  const f = await fetch(
+    `https://cdn.jsdelivr.net/gh/${REPO}@${REPO_BRANCH}/${ASSET_NAME}`);
+  if(!f.ok) throw new Error(`備援來源也讀不到 ${f.status}`);
+  return { data: await f.json(), from: "repo" };
+}
+
+async function loadData(){
+  try{
+    return await fetchFromRelease();
+  }catch(e){
+    console.warn("Release 讀取失敗，改用備援：", e.message);
+    return await fetchFromRepo();
+  }
+}
+
+// JSON 可能是純陣列，也可能包在物件裡，兩種都接
+function normalize(data){
+  if(Array.isArray(data)) return data;
+  for(const k of ["showtimes","data","items","results"]){
+    if(Array.isArray(data?.[k])) return data[k];
+  }
+  throw new Error("JSON 格式不認得，找不到場次陣列");
+}
+
+function boot(raw, from){
+  ALL = normalize(raw);
+  if(!ALL.length) throw new Error("資料是空的");
+
+  // 舊資料沒有 start 欄位的話，臨時補一個，畫面才不會壞掉
+  ALL.forEach(s => {
+    if(!s.start) s.start = `${s.date}T${s.time}:00+08:00`;
+  });
+
+  const days = [...new Set(ALL.map(s => s.actual_date || s.date))].sort();
+  $("dataInfo").textContent =
+    `${ALL.length.toLocaleString()} 場　`+
+    `${dayLabel(days[0])} ～ ${dayLabel(days[days.length-1])}　`+
+    `· ${from}`;
+
+  // 預設選今天，沒有今天就選第一天
+  //
+  // 注意：不能用 toISOString()，那是 UTC 時間，
+  // 台灣清晨 8 點前會算成「昨天」。
+  // 這裡明確指定用台灣時區來判斷今天是幾號。
+  const today = new Intl.DateTimeFormat("en-CA",
+    { timeZone:"Asia/Taipei" }).format(new Date());
+
+  buildFilters();
+  $("fDate").value = days.includes(today) ? today : days[0];
+  refreshDependent();
+
+  renderResults();
+  renderDock();
+}
+
+loadData()
+  .then(({data, from}) => boot(data, from))
   .catch(err => {
     $("dataInfo").textContent = "資料載入失敗";
     $("results").innerHTML =
       `<p class="empty"><strong>讀不到場次資料</strong>
-       ${err.message}<br>請確認 showtimes.json 和這個檔案放在一起，
-       而且是透過網址開啟（不是直接點兩下開檔案）</p>`;
+       ${htmlEsc(err.message)}<br><br>
+       請確認 <code>${htmlEsc(REPO)}</code> 的最新 Release 裡
+       有一個叫 <code>${htmlEsc(ASSET_NAME)}</code> 的附加檔案，
+       而且 repo 是公開的。</p>`;
   });
 </script>
 </body>
