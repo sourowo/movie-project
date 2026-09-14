@@ -1,16 +1,41 @@
-from flask import Flask, request
+from flask import Flask, request, send_from_directory
 import json
 import html
+import os
+import sys
 
 
 app = Flask(__name__)
 
 
 # =========================
+# 找出檔案放在哪裡
+# =========================
+#
+# 用 py app.py 執行時，「.」就是這個檔案所在的資料夾。
+# 但打包成 exe 之後，「.」會變成 PyInstaller 的暫存目錄，
+# 於是 showtimes.json 和 planner.html 就找不到了。
+#
+# sys.frozen 只有在 exe 環境下才存在，用它來分辨現在是哪種情況。
+# launcher.py 裡面也是同一套寫法。
+
+if getattr(sys, "frozen", False):
+    # exe：用 exe 自己所在的資料夾
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    # 一般執行：用這個 .py 檔所在的資料夾
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+# 常用路徑先組好，後面直接用
+SHOWTIMES_PATH = os.path.join(BASE_DIR, "showtimes.json")
+
+
+# =========================
 # 讀取電影場次資料
 # =========================
 
-with open("showtimes.json", "r", encoding="utf-8") as f:
+with open(SHOWTIMES_PATH, "r", encoding="utf-8") as f:
     showtimes = json.load(f)
 
 
@@ -754,6 +779,26 @@ def home():
 
 
     return html_page
+
+
+# =========================
+# 排片頁面
+# =========================
+#
+# 這兩個路由讓瀏覽器拿得到 planner.html 和場次資料。
+# planner.html 裡面會自己去 fetch("showtimes.json")。
+
+@app.route("/planner")
+def planner():
+    # 把 planner.html 這個檔案直接傳給瀏覽器
+    return send_from_directory(BASE_DIR, "planner.html")
+
+
+@app.route("/planner/showtimes.json")
+@app.route("/showtimes.json")
+def showtimes_json():
+    # 把場次資料當成一般檔案傳出去
+    return send_from_directory(BASE_DIR, "showtimes.json")
 
 
 # =========================

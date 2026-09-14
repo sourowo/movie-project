@@ -5,6 +5,9 @@ import json
 import time
 from datetime import datetime, timedelta
 
+# 借用 normalize.py 的整理功能（跨夜修正、拆 version、算結束時間）
+import normalize
+
 
 # ==========================================
 # 基本設定
@@ -17,6 +20,28 @@ START_DATE = today.strftime("%Y%m%d")
 END_DATE = (today + timedelta(days=6)).strftime("%Y%m%d")
 
 OUTPUT_FILE = "showtimes.json"
+
+
+# ------------------------------------------
+# 提前結束的設定
+# ------------------------------------------
+#
+# 電影院是「一天一天」慢慢公布場次的，
+# 所以通常只有最近兩三天查得到，後面幾天是空的。
+#
+# 如果某一天整天 0 筆，代表還沒公布到那裡，
+# 再往後爬也一定是空的，可以直接停止。
+#
+# 這樣做完全不會少抓東西，因為是「整天掃完確認是 0」才停，
+# 不是靠猜的。
+
+# 至少要爬滿幾天才允許提前結束。
+# 保險用：萬一第一天剛好網路不穩，也不會馬上收工。
+MIN_DAYS = 2
+
+# 當天失敗率超過這個比例，就不把「0 筆」當成真的沒場次。
+# 0.3 代表三成。避免網路斷掉時程式誤判而提早結束。
+MAX_FAIL_RATE = 0.3
 
 
 # ==========================================
@@ -149,7 +174,15 @@ def get_theaters(region_id, region_name):
 # 取得單一影城某一天的場次
 # ==========================================
 
+# 記錄這一天有幾次請求失敗（每天開始前會歸零）
+failed_today = 0
+
+
 def scrape_theater(theater, date):
+
+    # global 的意思是：
+    # 「我要改的是外面那個 failed_today，不是新開一個」
+    global failed_today
 
     theater_id = theater["theater_id"]
     region_id = theater["region_id"]
@@ -172,6 +205,9 @@ def scrape_theater(theater, date):
             date,
             response.status_code
         )
+
+        # 這次請求失敗，記一筆
+        failed_today += 1
 
         return []
 
@@ -450,13 +486,18 @@ total = len(all_theaters) * len(dates)
 current = 0
 
 
-for date in dates:
+# day_number 用來知道現在是第幾天（從 1 開始數）
+for day_number, date in enumerate(dates, start=1):
 
     print()
     print()
     print("########################################")
-    print("日期：", date)
+    print("日期：", date, f"（第 {day_number} 天）")
     print("########################################")
+
+    # 每天開始前，把這兩個計數器歸零
+    day_count = 0        # 這一天總共抓到幾筆場次
+    failed_today = 0     # 這一天有幾次請求失敗
 
 
     for theater in all_theaters:
@@ -481,6 +522,9 @@ for date in dates:
                 data
             )
 
+            # 累計這一天抓到的場次數
+            day_count += len(data)
+
             print(
                 "   場次：",
                 len(data)
@@ -497,9 +541,83 @@ for date in dates:
         time.sleep(0.3)
 
 
+    # --------------------------------------
+    # 這一天掃完了，決定要不要繼續往後爬
+    # --------------------------------------
+
+    print()
+    print(
+        f"→ {date} 小計：{day_count} 筆場次，"
+        f"失敗 {failed_today} 次"
+    )
+
+    # 這一天有抓到東西 → 後面可能還有，繼續
+    if day_count > 0:
+        continue
+
+    # 還沒爬滿最低天數 → 不敢下結論，繼續
+    if day_number < MIN_DAYS:
+        continue
+
+    # 算這一天的請求失敗率
+    fail_rate = failed_today / len(all_theaters)
+
+    # 失敗太多 → 這個 0 筆很可能是網路問題，不是真的沒場次
+    if fail_rate > MAX_FAIL_RATE:
+
+        print()
+        print(f"⚠ 這一天 0 筆，但失敗率高達 {fail_rate:.0%}")
+        print("　 可能是網路問題，保險起見繼續往後爬。")
+
+        continue
+
+    # 走到這裡 = 整天掃完、請求也都正常、就是真的沒場次
+    # → 後面的日期一定也還沒公布，直接停止
+
+    remaining = len(dates) - day_number
+    saved = remaining * len(all_theaters)
+
+    print()
+    print("=" * 60)
+    print(f"{date} 完全沒有場次，代表戲院還沒公布到這裡。")
+    print(f"跳過後面 {remaining} 天，省下 {saved} 次請求。")
+    print("=" * 60)
+
+    # break = 跳出日期迴圈，不再往後爬
+    break
+
+
 # ==========================================
 # 儲存 JSON
 # ==========================================
+
+# ==========================================
+# 正規化
+# ==========================================
+#
+# 抓回來的是原始資料，這裡整理成乾淨格式再存檔：
+#   1. 把半夜場次的日期修正到正確的那一天
+#   2. 把 version 拆成 語言 / 規格 / 廳型 / 特別場
+#   3. 用片長算出估計的結束時間
+#
+# 詳細做法都寫在 normalize.py 裡面。
+
+print()
+print("正在整理資料...")
+
+all_showtimes = normalize.normalize_all(all_showtimes)
+
+crossed = sum(
+    1 for x in all_showtimes if x["crosses_midnight"]
+)
+
+unmapped = sum(
+    1 for x in all_showtimes if x["version_unmapped"]
+)
+
+print("  跨夜場次修正：", crossed, "筆")
+print("  version 無法分類：", unmapped, "筆")
+
 
 with open(
     OUTPUT_FILE,

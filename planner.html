@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>排片 · 電影場次</title>
+<style>
+/* ============================================================
+   設計基調
+   深松綠當主色，衝突用磚紅，太趕用赭黃。
+   時間全部用等寬數字（tabular-nums），時刻表才會對齊。
+   ============================================================ */
+:root{
+  --paper:#FBFAF7;
+  --ink:#16161A;
+  --muted:#74736E;
+  --line:#E4E2DC;
+  --pine:#1F4D46;
+  --clash:#B23B32;
+  --tight:#A9641E;
+  --card:#FFFFFF;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",
+              "Microsoft JhengHei",sans-serif;
+  background:var(--paper); color:var(--ink);
+  line-height:1.6; font-size:15px;
+  padding-bottom:88px;               /* 讓底部浮動列不會蓋住內容 */
+}
+.wrap{max-width:640px;margin:0 auto;padding:0 16px}
+time,.num{font-variant-numeric:tabular-nums}
+
+/* ---------- 頁首 ---------- */
+header{padding:28px 0 20px;border-bottom:1px solid var(--line);margin-bottom:20px}
+h1{font-size:26px;font-weight:700;letter-spacing:-.02em}
+.sub{color:var(--muted);font-size:13px;margin-top:4px}
+
+/* ---------- 分頁切換 ---------- */
+.tabs{display:flex;gap:4px;margin-bottom:20px}
+.tab{
+  flex:1;padding:10px;border:1px solid var(--line);background:transparent;
+  border-radius:8px;font:inherit;font-size:14px;color:var(--muted);
+  cursor:pointer;
+}
+.tab[aria-selected="true"]{background:var(--pine);border-color:var(--pine);color:#fff}
+.tab:focus-visible{outline:2px solid var(--pine);outline-offset:2px}
+
+/* ---------- 篩選 ---------- */
+.filters{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+.filters label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+select,input[type=search]{
+  width:100%;padding:9px 10px;font:inherit;font-size:14px;
+  border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);
+}
+.filters .full{grid-column:1/-1}
+select:focus,input:focus{outline:2px solid var(--pine);outline-offset:-1px}
+
+/* ---------- 場次列表 ---------- */
+.count{font-size:13px;color:var(--muted);margin:14px 0 8px}
+.row{
+  display:flex;gap:12px;align-items:flex-start;width:100%;text-align:left;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;
+  padding:12px 14px;margin-bottom:8px;font:inherit;color:inherit;cursor:pointer;
+}
+.row:focus-visible{outline:2px solid var(--pine);outline-offset:2px}
+.row[data-picked="1"]{border-color:var(--pine);background:#F2F6F4}
+.row .when{min-width:52px;font-size:17px;font-weight:600}
+.row .body{flex:1;min-width:0}
+.row .title{font-weight:600;word-break:break-word}
+.row .meta{font-size:12.5px;color:var(--muted);margin-top:2px}
+.row .mark{
+  width:22px;height:22px;flex:none;border-radius:50%;border:1.5px solid var(--line);
+  display:grid;place-items:center;font-size:13px;color:transparent;margin-top:2px;
+}
+.row[data-picked="1"] .mark{background:var(--pine);border-color:var(--pine);color:#fff}
+
+/* 規格標籤 */
+.tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+.tag{font-size:11px;padding:1px 6px;border:1px solid var(--line);border-radius:4px;color:var(--muted)}
+.tag.fmt{border-color:#C9D6D2;color:var(--pine)}
+
+/* ---------- 片單時間軸 ---------- */
+.day{margin-bottom:26px}
+.day h2{font-size:15px;font-weight:600;margin-bottom:10px}
+.slot{display:flex;gap:12px;align-items:stretch}
+.rail{min-width:52px;padding-top:12px;font-size:15px;font-weight:600}
+.rail .end{display:block;font-size:12px;font-weight:400;color:var(--muted)}
+.slot .card{
+  flex:1;background:var(--card);border:1px solid var(--line);border-left:3px solid var(--pine);
+  border-radius:8px;padding:11px 13px;min-width:0;
+}
+.slot .card .title{font-weight:600;word-break:break-word}
+.slot .card .meta{font-size:12.5px;color:var(--muted);margin-top:2px}
+.drop{background:none;border:none;font:inherit;font-size:12.5px;color:var(--clash);
+      cursor:pointer;padding:4px 0 0;text-decoration:underline}
+
+/* 兩場之間的空檔 / 警告 */
+.gap{display:flex;gap:12px;align-items:center;font-size:12.5px;padding:6px 0}
+.gap .rail{min-width:52px;padding:0}
+.gap .txt{flex:1;color:var(--muted)}
+.gap.warn .txt{color:var(--tight);font-weight:600}
+.gap.bad .txt{color:var(--clash);font-weight:600}
+.gap.bad+.slot .card,.slot.bad .card{border-left-color:var(--clash)}
+
+/* ---------- 底部浮動列 ---------- */
+.dock{
+  position:fixed;left:0;right:0;bottom:0;background:var(--card);
+  border-top:1px solid var(--line);padding:12px 16px;
+}
+.dock .wrap{display:flex;gap:10px;align-items:center;padding:0 16px}
+.dock .n{flex:1;font-size:13.5px}
+.btn{
+  padding:10px 16px;border:none;border-radius:8px;background:var(--pine);color:#fff;
+  font:inherit;font-size:14px;font-weight:600;cursor:pointer;
+}
+.btn[disabled]{background:var(--line);color:var(--muted);cursor:default}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink);font-weight:400}
+.btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+
+.empty{text-align:center;color:var(--muted);padding:48px 20px;font-size:14px}
+.empty strong{display:block;color:var(--ink);font-size:16px;margin-bottom:6px}
+.hide{display:none}
+
+@media(prefers-reduced-motion:no-preference){
+  .row{transition:border-color .12s,background .12s}
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <h1>排片</h1>
+    <p class="sub" id="dataInfo">載入中…</p>
+  </header>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" id="tabFind" role="tab" aria-selected="true">找場次</button>
+    <button class="tab" id="tabList" role="tab" aria-selected="false">我的片單</button>
+  </div>
+
+  <!-- ===== 找場次 ===== -->
+  <section id="paneFind">
+    <div class="filters">
+      <div><label for="fDate">日期</label><select id="fDate"></select></div>
+      <div><label for="fRegion">地區</label><select id="fRegion"></select></div>
+      <div><label for="fCinema">影城</label><select id="fCinema"></select></div>
+      <div><label for="fMovie">電影</label><select id="fMovie"></select></div>
+      <div class="full">
+        <label for="fText">關鍵字</label>
+        <input type="search" id="fText" placeholder="片名或影城">
+      </div>
+    </div>
+    <p class="count" id="count"></p>
+    <div id="results"></div>
+  </section>
+
+  <!-- ===== 我的片單 ===== -->
+  <section id="paneList" class="hide">
+    <div id="plan"></div>
+  </section>
+</div>
+
+<div class="dock">
+  <div class="wrap">
+    <span class="n" id="dockText">片單是空的</span>
+    <button class="btn ghost" id="btnClear" disabled>清空</button>
+    <button class="btn" id="btnIcs" disabled>下載行事曆</button>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   設定
+   ============================================================ */
+
+// 同一間影城，兩場之間至少要留幾分鐘（走出廳、上廁所、再進場）
+const BUFFER_SAME = 15;
+
+// 不同影城，至少要留幾分鐘（要移動）
+// 這是保守的估計值，實際還是要自己看地圖
+const BUFFER_MOVE = 60;
+
+const STORE_KEY = "moviePlanner.picked.v1";
+
+
+/* ============================================================
+   狀態
+   ============================================================ */
+
+let ALL = [];                 // 全部場次
+let PICKED = loadPicked();    // 已選場次（存在瀏覽器裡）
+
+
+/* ============================================================
+   小工具
+   ============================================================ */
+
+// 每一場的唯一編號，用來判斷有沒有重複選
+function keyOf(s){
+  return [s.theater_id, s.movie_id, s.start, s.version_raw||""].join("|");
+}
+
+// "2026-09-16T02:25:00+08:00" → Date 物件
+function toDate(iso){ return new Date(iso); }
+
+// Date → "14:30"
+function hhmm(d){
+  return String(d.getHours()).padStart(2,"0")+":"+
+         String(d.getMinutes()).padStart(2,"0");
+}
+
+// "2026-09-16" → "9/16（三）"
+const WEEK = ["日","一","二","三","四","五","六"];
+function dayLabel(ymd){
+  const d = new Date(ymd+"T00:00:00+08:00");
+  return `${d.getMonth()+1}/${d.getDate()}（${WEEK[d.getDay()]}）`;
+}
+
+// 分鐘數 → "1 小時 20 分"
+function minText(m){
+  if(m < 60) return `${m} 分鐘`;
+  const h = Math.floor(m/60), r = m%60;
+  return r ? `${h} 小時 ${r} 分` : `${h} 小時`;
+}
+
+function loadPicked(){
+  try{ return JSON.parse(localStorage.getItem(STORE_KEY)) || []; }
+  catch(e){ return []; }
+}
+function savePicked(){
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(PICKED)); }
+  catch(e){ /* 無痕模式可能存不了，不影響當次使用 */ }
+}
+
+
+/* ============================================================
+   衝突判斷
+   ============================================================
+   兩場的關係分三種：
+     bad   兩場時間直接重疊 → 不可能都看到
+     warn  沒重疊，但中間空檔太短 → 趕不上
+     ok    正常
+============================================================ */
+
+function checkPair(a, b){
+  const aEnd   = toDate(a.end_estimated || a.start);
+  const bStart = toDate(b.start);
+
+  // 中間空幾分鐘（負數代表重疊）
+  const gap = Math.round((bStart - aEnd) / 60000);
+
+  const sameCinema = a.theater_id === b.theater_id;
+  const need = sameCinema ? BUFFER_SAME : BUFFER_MOVE;
+
+  if(gap < 0){
+    return { level:"bad", gap,
+      text:`與上一場重疊 ${minText(-gap)}，無法都看` };
+  }
+  if(gap < need){
+    return { level:"warn", gap,
+      text: sameCinema
+        ? `只有 ${minText(gap)}空檔，同影城建議至少留 ${BUFFER_SAME} 分鐘`
+        : `只有 ${minText(gap)}空檔，還要從${a.cinema}移動到${b.cinema}` };
+  }
+  return { level:"ok", gap,
+    text: sameCinema ? `空檔 ${minText(gap)}`
+                     : `空檔 ${minText(gap)}，需移動到${b.cinema}` };
+}
+
+
+/* ============================================================
+   匯出 .ics（行事曆檔）
+   ============================================================
+   時間一律轉成 UTC 並加上 Z 結尾，這是最不會出錯的寫法，
+   Google 日曆、iPhone 行事曆、Outlook 都認得。
+============================================================ */
+
+// 這些符號在 ics 裡有特殊意義，要加反斜線
+function esc(t){
+  return String(t||"")
+    .replace(/\\/g,"\\\\").replace(/;/g,"\\;")
+    .replace(/,/g,"\\,").replace(/\r?\n/g,"\\n");
+}
+
+// Date → "20260916T062500Z"
+function utc(d){
+  const p = n => String(n).padStart(2,"0");
+  return d.getUTCFullYear()+p(d.getUTCMonth()+1)+p(d.getUTCDate())+"T"
+       + p(d.getUTCHours())+p(d.getUTCMinutes())+p(d.getUTCSeconds())+"Z";
+}
+
+// ics 規定每行不能超過 75 個位元組，太長要折行（下一行開頭放一個空格）
+function fold(line){
+  const bytes = new TextEncoder().encode(line);
+  if(bytes.length <= 75) return line;
+
+  const out = [];
+  let cur = "", curLen = 0, limit = 75;
+
+  for(const ch of line){
+    const n = new TextEncoder().encode(ch).length;
+    if(curLen + n > limit){
+      out.push(cur);
+      cur = " " + ch;            // 續行前面要加一個空格
+      curLen = 1 + n;
+      limit = 75;
+    }else{
+      cur += ch; curLen += n;
+    }
+  }
+  out.push(cur);
+  return out.join("\r\n");
+}
+
+function buildIcs(list){
+  const now = utc(new Date());
+  const L = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//MoviePlanner//TW//ZH",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+  ];
+
+  list.forEach((s, i) => {
+    const start = toDate(s.start);
+    const end   = s.end_estimated ? toDate(s.end_estimated)
+                : new Date(start.getTime() + 120*60000);   // 沒片長就抓 2 小時
+
+    const badges = [].concat(s.formats||[], s.halls||[], s.languages||[]);
+
+    const desc = [
+      s.cinema,
+      badges.length ? badges.join("、") : null,
+      s.runtime_minutes ? `片長 ${s.runtime_minutes} 分鐘` : null,
+      "結束時間為估計值（已含約 12 分鐘廣告預告）",
+    ].filter(Boolean).join("\n");
+
+    L.push(
+      "BEGIN:VEVENT",
+      fold(`UID:${utc(start)}-${i}@movieplanner.local`),
+      `DTSTAMP:${now}`,
+      `DTSTART:${utc(start)}`,
+      `DTEND:${utc(end)}`,
+      fold(`SUMMARY:${esc(s.movie)}`),
+      fold(`LOCATION:${esc(s.cinema)}`),
+      fold(`DESCRIPTION:${esc(desc)}`),
+    );
+    if(s.movie_url) L.push(fold(`URL:${s.movie_url}`));
+
+    // 開演前 30 分鐘提醒
+    L.push(
+      "BEGIN:VALARM",
+      "ACTION:DISPLAY",
+      "TRIGGER:-PT30M",
+      fold(`DESCRIPTION:${esc(s.movie)} 快開演了`),
+      "END:VALARM",
+      "END:VEVENT",
+    );
+  });
+
+  L.push("END:VCALENDAR");
+  return L.join("\r\n");
+}
+
+function downloadIcs(){
+  const list = sortedPicked();
+  if(!list.length) return;
+
+  const blob = new Blob([buildIcs(list)],
+                        {type:"text/calendar;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `我的片單_${list[0].actual_date||"行事曆"}.ics`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+
+/* ============================================================
+   畫面：找場次
+   ============================================================ */
+
+const $ = id => document.getElementById(id);
+
+function uniq(arr){ return [...new Set(arr)].sort(); }
+
+function fillSelect(el, values, allLabel){
+  const keep = el.value;
+  el.innerHTML = `<option value="">${allLabel}</option>` +
+    values.map(v => `<option>${v}</option>`).join("");
+  if(values.includes(keep)) el.value = keep;
+}
+
+function buildFilters(){
+  fillSelect($("fDate"),
+    uniq(ALL.map(s => s.actual_date || s.date)).map(d => d), "全部日期");
+
+  // 日期選單顯示成 9/16（三）比較好讀
+  [...$("fDate").options].forEach(o => {
+    if(o.value) o.textContent = dayLabel(o.value);
+  });
+
+  fillSelect($("fRegion"), uniq(ALL.map(s => s.region)), "全部地區");
+  refreshDependent();
+}
+
+// 影城和電影跟著日期、地區變動
+function refreshDependent(){
+  const d = $("fDate").value, r = $("fRegion").value;
+  const pool = ALL.filter(s =>
+    (!d || (s.actual_date||s.date) === d) && (!r || s.region === r));
+
+  fillSelect($("fCinema"), uniq(pool.map(s => s.cinema)), "全部影城");
+  fillSelect($("fMovie"),  uniq(pool.map(s => s.movie)),  "全部電影");
+}
+
+function currentResults(){
+  const d = $("fDate").value, r = $("fRegion").value;
+  const c = $("fCinema").value, m = $("fMovie").value;
+  const t = $("fText").value.trim().toLowerCase();
+
+  return ALL.filter(s =>
+    (!d || (s.actual_date||s.date) === d) &&
+    (!r || s.region === r) &&
+    (!c || s.cinema === c) &&
+    (!m || s.movie  === m) &&
+    (!t || s.movie.toLowerCase().includes(t)
+        || s.cinema.toLowerCase().includes(t))
+  ).sort((a,b) => a.start < b.start ? -1 : 1);
+}
+
+function badgeHtml(s){
+  const fmt = (s.formats||[]).map(v => `<span class="tag fmt">${v}</span>`);
+  const oth = [].concat(s.halls||[], s.languages||[], s.events||[])
+                .map(v => `<span class="tag">${v}</span>`);
+  const all = fmt.concat(oth);
+  return all.length ? `<div class="tags">${all.join("")}</div>` : "";
+}
+
+function renderResults(){
+  const list = currentResults();
+  $("count").textContent = `${list.length.toLocaleString()} 場`;
+
+  if(!list.length){
+    $("results").innerHTML =
+      `<p class="empty"><strong>這個組合沒有場次</strong>換個日期或地區看看</p>`;
+    return;
+  }
+
+  const shown = list.slice(0, 300);      // 一次最多畫 300 筆，手機才不會卡
+  const picks = new Set(PICKED.map(keyOf));
+
+  $("results").innerHTML = shown.map(s => {
+    const on = picks.has(keyOf(s)) ? "1" : "0";
+    const end = s.end_estimated ? hhmm(toDate(s.end_estimated)) : "";
+    return `
+    <button class="row" data-picked="${on}" data-key="${keyOf(s)}">
+      <span class="mark">✓</span>
+      <span class="when num">${hhmm(toDate(s.start))}
+        <span style="display:block;font-size:11.5px;font-weight:400;color:var(--muted)">
+          ${end ? "～"+end : ""}</span></span>
+      <span class="body">
+        <span class="title">${s.movie}</span>
+        <span class="meta">${dayLabel(s.actual_date||s.date)}　${s.cinema}</span>
+        ${badgeHtml(s)}
+      </span>
+    </button>`;
+  }).join("") +
+  (list.length > shown.length
+    ? `<p class="count">還有 ${list.length-shown.length} 場，請再縮小範圍</p>` : "");
+}
+
+// 點一下 = 加入或移除片單
+$("results").addEventListener("click", e => {
+  const row = e.target.closest(".row");
+  if(!row) return;
+  const k = row.dataset.key;
+  const hit = ALL.find(s => keyOf(s) === k);
+  if(!hit) return;
+
+  const i = PICKED.findIndex(s => keyOf(s) === k);
+  if(i >= 0) PICKED.splice(i,1); else PICKED.push(hit);
+
+  savePicked();
+  row.dataset.picked = i >= 0 ? "0" : "1";
+  renderDock();
+});
+
+
+/* ============================================================
+   畫面：我的片單
+   ============================================================ */
+
+function sortedPicked(){
+  return [...PICKED].sort((a,b) => a.start < b.start ? -1 : 1);
+}
+
+function renderPlan(){
+  const list = sortedPicked();
+
+  if(!list.length){
+    $("plan").innerHTML =
+      `<p class="empty"><strong>還沒有選任何場次</strong>
+       到「找場次」點選想看的電影，這裡會幫你檢查時間會不會撞到</p>`;
+    return;
+  }
+
+  // 依日期分組
+  const byDay = {};
+  list.forEach(s => {
+    const d = s.actual_date || s.date;
+    (byDay[d] = byDay[d] || []).push(s);
+  });
+
+  $("plan").innerHTML = Object.keys(byDay).sort().map(d => {
+    const day = byDay[d];
+    let html = `<div class="day"><h2>${dayLabel(d)}</h2>`;
+
+    day.forEach((s, i) => {
+      // 這一場跟前一場的關係
+      if(i > 0){
+        const r = checkPair(day[i-1], s);
+        const cls = r.level === "ok" ? "" : (r.level === "bad" ? "bad" : "warn");
+        html += `<div class="gap ${cls}"><span class="rail"></span>
+                 <span class="txt">${r.text}</span></div>`;
+      }
+
+      const end = s.end_estimated ? hhmm(toDate(s.end_estimated)) : "";
+      const badges = [].concat(s.formats||[], s.halls||[], s.languages||[]);
+
+      html += `
+      <div class="slot">
+        <div class="rail num">${hhmm(toDate(s.start))}
+          <span class="end">${end ? "～"+end : ""}</span></div>
+        <div class="card">
+          <div class="title">${s.movie}</div>
+          <div class="meta">${s.cinema}${
+            badges.length ? "　"+badges.join("、") : ""}${
+            s.runtime_minutes ? "　"+s.runtime_minutes+" 分鐘" : ""}</div>
+          <button class="drop" data-key="${keyOf(s)}">移除</button>
+        </div>
+      </div>`;
+    });
+
+    return html + `</div>`;
+  }).join("");
+}
+
+$("plan").addEventListener("click", e => {
+  const b = e.target.closest(".drop");
+  if(!b) return;
+  const i = PICKED.findIndex(s => keyOf(s) === b.dataset.key);
+  if(i >= 0){ PICKED.splice(i,1); savePicked(); renderPlan(); renderDock(); renderResults(); }
+});
+
+
+/* ============================================================
+   底部浮動列
+   ============================================================ */
+
+function renderDock(){
+  const n = PICKED.length;
+  const list = sortedPicked();
+
+  // 算有幾組衝突
+  let bad = 0, warn = 0;
+  const byDay = {};
+  list.forEach(s => {
+    const d = s.actual_date || s.date;
+    (byDay[d] = byDay[d] || []).push(s);
+  });
+  Object.values(byDay).forEach(day => {
+    for(let i=1;i<day.length;i++){
+      const lv = checkPair(day[i-1], day[i]).level;
+      if(lv === "bad") bad++; else if(lv === "warn") warn++;
+    }
+  });
+
+  let txt = n ? `已選 ${n} 場` : "片單是空的";
+  if(bad)  txt += `　⚠ ${bad} 組重疊`;
+  else if(warn) txt += `　${warn} 組偏趕`;
+
+  $("dockText").textContent = txt;
+  $("btnIcs").disabled = !n;
+  $("btnClear").disabled = !n;
+}
+
+
+/* ============================================================
+   分頁切換
+   ============================================================ */
+
+function showTab(which){
+  const find = which === "find";
+  $("tabFind").setAttribute("aria-selected", find);
+  $("tabList").setAttribute("aria-selected", !find);
+  $("paneFind").classList.toggle("hide", !find);
+  $("paneList").classList.toggle("hide", find);
+  if(!find) renderPlan();
+}
+
+$("tabFind").onclick = () => showTab("find");
+$("tabList").onclick = () => showTab("list");
+
+$("btnIcs").onclick = downloadIcs;
+$("btnClear").onclick = () => {
+  if(!confirm("確定要清空片單嗎？")) return;
+  PICKED = []; savePicked();
+  renderPlan(); renderDock(); renderResults();
+};
+
+["fDate","fRegion"].forEach(id =>
+  $(id).addEventListener("change", () => { refreshDependent(); renderResults(); }));
+["fCinema","fMovie"].forEach(id =>
+  $(id).addEventListener("change", renderResults));
+$("fText").addEventListener("input", renderResults);
+
+
+/* ============================================================
+   開始：載入資料
+   ============================================================ */
+
+fetch("showtimes.json")
+  .then(r => {
+    if(!r.ok) throw new Error("找不到 showtimes.json");
+    return r.json();
+  })
+  .then(data => {
+    ALL = data;
+
+    // 舊資料沒有 start 欄位的話，臨時補一個，畫面才不會壞掉
+    ALL.forEach(s => {
+      if(!s.start) s.start = `${s.date}T${s.time}:00+08:00`;
+    });
+
+    const days = [...new Set(ALL.map(s => s.actual_date || s.date))].sort();
+    $("dataInfo").textContent =
+      `${ALL.length.toLocaleString()} 場　`+
+      `${dayLabel(days[0])} ～ ${dayLabel(days[days.length-1])}`;
+
+    // 預設選今天，沒有今天就選第一天
+    const today = new Date().toISOString().slice(0,10);
+    buildFilters();
+    $("fDate").value = days.includes(today) ? today : days[0];
+    refreshDependent();
+
+    renderResults();
+    renderDock();
+  })
+  .catch(err => {
+    $("dataInfo").textContent = "資料載入失敗";
+    $("results").innerHTML =
+      `<p class="empty"><strong>讀不到場次資料</strong>
+       ${err.message}<br>請確認 showtimes.json 和這個檔案放在一起，
+       而且是透過網址開啟（不是直接點兩下開檔案）</p>`;
+  });
+</script>
+</body>
+</html>
