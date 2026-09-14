@@ -177,7 +177,7 @@ footer p+p{margin-top:8px}
        個人非營利專案，原始碼在
        <a href="https://github.com/sourowo/movie-project"
           target="_blank" rel="noopener">GitHub</a>。</p>
-    <p style="opacity:.6">版本 2026-09-15c</p>
+    <p style="opacity:.6">版本 2026-09-15d</p>
   </footer>
 </div>
 
@@ -194,10 +194,8 @@ footer p+p{margin-top:8px}
    設定
    ============================================================ */
 
-// 資料來源：GitHub Release 的附加檔案
-const REPO       = "sourowo/movie-project";   // owner/repo
-const ASSET_NAME = "showtimes.json";          // Release 裡的檔名
-const REPO_BRANCH = "main";                   // 備援用：repo 主分支
+// 資料來源：跟這個 html 放在同一個資料夾的 json
+const DATA_FILE = "showtimes.json";
 
 // 同一間影城，兩場之間至少要留幾分鐘（走出廳、上廁所、再進場）
 const BUFFER_SAME = 15;
@@ -674,56 +672,22 @@ $("fText").addEventListener("input", renderResults);
 
 
 /* ============================================================
-   載入資料：GitHub Release
+   載入資料
    ============================================================
-   為什麼不直接 fetch
-     https://github.com/OWNER/REPO/releases/latest/download/xxx.json
-   ？那個網址是「網頁跳轉頁」，github.com 沒有給 CORS 標頭，
-   瀏覽器裡的 fetch 會直接被擋掉（在瀏覽器網址列貼上倒是會下載）。
+   讀跟這個 html 放在同一個資料夾的 showtimes.json。
 
-   正確做法：
-     1. 打 GitHub API 問「最新的 Release 是哪一個」
-        api.github.com 有 CORS 標頭，可以 fetch。
-     2. 從回傳的 assets 找出檔名相符的那一個，
-        用它的 browser_download_url 下載
-        （最後會導到 objects.githubusercontent.com，也有 CORS）。
-
-   API 未登入時每小時限 60 次，一般使用綽綽有餘。
-   萬一真的被限流，下面還有一個 jsDelivr 的備援路線，
-   讀 repo 裡的同名檔案。
+   注意：一定要用網址開啟這個頁面（http:// 或 https://），
+   直接點兩下開檔案（file://）會被瀏覽器的安全限制擋掉，
+   fetch 會失敗。本機測試可以在資料夾裡跑：
+     python3 -m http.server 8000
+   然後開 http://localhost:8000
 ============================================================ */
 
-async function fetchFromRelease(){
-  const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
-    headers: { "Accept": "application/vnd.github+json" }
-  });
-  if(!r.ok) throw new Error(`GitHub API ${r.status}`);
-
-  const rel = await r.json();
-  const asset = (rel.assets || []).find(a => a.name === ASSET_NAME);
-  if(!asset) throw new Error(`Release「${rel.tag_name}」裡沒有 ${ASSET_NAME}`);
-
-  const f = await fetch(asset.browser_download_url);
-  if(!f.ok) throw new Error(`下載失敗 ${f.status}`);
-
-  return { data: await f.json(), from: `Release ${rel.tag_name}` };
-}
-
-// 備援：直接讀 repo 裡的檔案（走 jsDelivr CDN，有 CORS）
-async function fetchFromRepo(){
-  const f = await fetch(
-    `https://cdn.jsdelivr.net/gh/${REPO}@${REPO_BRANCH}/${ASSET_NAME}`);
-  if(!f.ok) throw new Error(`備援來源也讀不到 ${f.status}`);
-  return { data: await f.json(), from: "repo" };
-}
-
 async function loadData(){
-  try{
-    return await fetchFromRelease();
-  }catch(e){
-    console.warn("Release 讀取失敗，改用備援：", e.message);
-    return await fetchFromRepo();
-  }
+  // 加上時間戳，避免瀏覽器拿到快取的舊資料
+  const r = await fetch(`${DATA_FILE}?t=${Date.now()}`);
+  if(!r.ok) throw new Error(`讀不到 ${DATA_FILE}（${r.status}）`);
+  return { data: await r.json(), from: DATA_FILE };
 }
 
 // JSON 可能是純陣列，也可能包在物件裡，兩種都接
@@ -735,7 +699,7 @@ function normalize(data){
   throw new Error("JSON 格式不認得，找不到場次陣列");
 }
 
-function boot(raw, from){
+function boot(raw){
   ALL = normalize(raw);
   if(!ALL.length) throw new Error("資料是空的");
 
@@ -747,8 +711,7 @@ function boot(raw, from){
   const days = [...new Set(ALL.map(s => s.actual_date || s.date))].sort();
   $("dataInfo").textContent =
     `${ALL.length.toLocaleString()} 場　`+
-    `${dayLabel(days[0])} ～ ${dayLabel(days[days.length-1])}　`+
-    `· ${from}`;
+    `${dayLabel(days[0])} ～ ${dayLabel(days[days.length-1])}`;
 
   // 預設選今天，沒有今天就選第一天
   //
@@ -767,15 +730,14 @@ function boot(raw, from){
 }
 
 loadData()
-  .then(({data, from}) => boot(data, from))
+  .then(({data}) => boot(data))
   .catch(err => {
     $("dataInfo").textContent = "資料載入失敗";
     $("results").innerHTML =
       `<p class="empty"><strong>讀不到場次資料</strong>
        ${htmlEsc(err.message)}<br><br>
-       請確認 <code>${htmlEsc(REPO)}</code> 的最新 Release 裡
-       有一個叫 <code>${htmlEsc(ASSET_NAME)}</code> 的附加檔案，
-       而且 repo 是公開的。</p>`;
+       請確認 <code>${htmlEsc(DATA_FILE)}</code> 和這個檔案放在一起，
+       而且是透過網址開啟（不是直接點兩下開檔案）。</p>`;
   });
 </script>
 </body>
