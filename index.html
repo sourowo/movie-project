@@ -119,6 +119,14 @@ select:focus,input:focus{outline:2px solid var(--pine);outline-offset:-1px}
 .btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 
 .empty{text-align:center;color:var(--muted);padding:48px 20px;font-size:14px}
+
+/* ---------- 頁尾 ---------- */
+footer{
+  border-top:1px solid var(--line);margin-top:32px;padding:20px 0 8px;
+  font-size:12.5px;color:var(--muted);line-height:1.8;
+}
+footer a{color:var(--pine)}
+footer p+p{margin-top:8px}
 .empty strong{display:block;color:var(--ink);font-size:16px;margin-bottom:6px}
 .hide{display:none}
 
@@ -160,6 +168,16 @@ select:focus,input:focus{outline:2px solid var(--pine);outline-offset:-1px}
   <section id="paneList" class="hide">
     <div id="plan"></div>
   </section>
+  <footer>
+    <p>場次資料來源：<a href="https://www.atmovies.com.tw/"
+       target="_blank" rel="noopener">開眼電影網</a>
+       　資料每日更新，實際場次與票價請以各影城公告為準。</p>
+    <p>結束時間為估計值，已加上約 12 分鐘廣告與預告。
+       個人非營利專案，原始碼在
+       <a href="https://github.com/sourowo/movie-project"
+          target="_blank" rel="noopener">GitHub</a>。</p>
+    <p style="opacity:.6">版本 2026-09-15b</p>
+  </footer>
 </div>
 
 <div class="dock">
@@ -206,16 +224,24 @@ function keyOf(s){
 function toDate(iso){ return new Date(iso); }
 
 // Date → "14:30"
-function hhmm(d){
-  return String(d.getHours()).padStart(2,"0")+":"+
-         String(d.getMinutes()).padStart(2,"0");
-}
+//
+// 場次時間一律用台灣時間顯示。
+// 不能直接用 getHours()，那是「看這台電腦的時區」，
+// 人在國外開這個頁面，時刻表就會整個偏掉。
+const TPE_HHMM = new Intl.DateTimeFormat("en-GB", {
+  timeZone:"Asia/Taipei", hour:"2-digit", minute:"2-digit", hour12:false
+});
+function hhmm(d){ return TPE_HHMM.format(d); }
 
 // "2026-09-16" → "9/16（三）"
+//
+// 直接拆字串算，不經過本地時區，
+// 免得在別的時區變成前一天或後一天。
 const WEEK = ["日","一","二","三","四","五","六"];
 function dayLabel(ymd){
-  const d = new Date(ymd+"T00:00:00+08:00");
-  return `${d.getMonth()+1}/${d.getDate()}（${WEEK[d.getDay()]}）`;
+  const [y, m, d] = String(ymd).split("-").map(Number);
+  const w = new Date(Date.UTC(y, m-1, d)).getUTCDay();
+  return `${m}/${d}（${WEEK[w]}）`;
 }
 
 // 分鐘數 → "1 小時 20 分"
@@ -388,23 +414,35 @@ const $ = id => document.getElementById(id);
 
 function uniq(arr){ return [...new Set(arr)].sort(); }
 
-function fillSelect(el, values, allLabel){
+// 片名、影城名可能含有 < > & " 這些字元，
+// 直接塞進 HTML 會把版面弄壞，所以要先換成安全寫法。
+function esc(t){
+  return String(t==null?"":t)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+function fillSelect(el, values, labelFn, allLabel){
   const keep = el.value;
+
+  // 每個 option 都要明確寫 value。
+  // 如果只寫 <option>文字</option>，瀏覽器會拿「顯示文字」當值，
+  // 之後改了顯示文字，值也會跟著變，篩選就會對不上。
   el.innerHTML = `<option value="">${allLabel}</option>` +
-    values.map(v => `<option>${v}</option>`).join("");
+    values.map(v =>
+      `<option value="${esc(v)}">${esc(labelFn ? labelFn(v) : v)}</option>`
+    ).join("");
+
   if(values.includes(keep)) el.value = keep;
 }
 
 function buildFilters(){
+  // 值是 2026-09-15，但畫面上顯示 9/15（二）
   fillSelect($("fDate"),
-    uniq(ALL.map(s => s.actual_date || s.date)).map(d => d), "全部日期");
+    uniq(ALL.map(s => s.actual_date || s.date)),
+    dayLabel, "全部日期");
 
-  // 日期選單顯示成 9/16（三）比較好讀
-  [...$("fDate").options].forEach(o => {
-    if(o.value) o.textContent = dayLabel(o.value);
-  });
-
-  fillSelect($("fRegion"), uniq(ALL.map(s => s.region)), "全部地區");
+  fillSelect($("fRegion"), uniq(ALL.map(s => s.region)), null, "全部地區");
   refreshDependent();
 }
 
@@ -414,8 +452,8 @@ function refreshDependent(){
   const pool = ALL.filter(s =>
     (!d || (s.actual_date||s.date) === d) && (!r || s.region === r));
 
-  fillSelect($("fCinema"), uniq(pool.map(s => s.cinema)), "全部影城");
-  fillSelect($("fMovie"),  uniq(pool.map(s => s.movie)),  "全部電影");
+  fillSelect($("fCinema"), uniq(pool.map(s => s.cinema)), null, "全部影城");
+  fillSelect($("fMovie"),  uniq(pool.map(s => s.movie)),  null, "全部電影");
 }
 
 function currentResults(){
@@ -434,9 +472,9 @@ function currentResults(){
 }
 
 function badgeHtml(s){
-  const fmt = (s.formats||[]).map(v => `<span class="tag fmt">${v}</span>`);
+  const fmt = (s.formats||[]).map(v => `<span class="tag fmt">${esc(v)}</span>`);
   const oth = [].concat(s.halls||[], s.languages||[], s.events||[])
-                .map(v => `<span class="tag">${v}</span>`);
+                .map(v => `<span class="tag">${esc(v)}</span>`);
   const all = fmt.concat(oth);
   return all.length ? `<div class="tags">${all.join("")}</div>` : "";
 }
@@ -458,14 +496,14 @@ function renderResults(){
     const on = picks.has(keyOf(s)) ? "1" : "0";
     const end = s.end_estimated ? hhmm(toDate(s.end_estimated)) : "";
     return `
-    <button class="row" data-picked="${on}" data-key="${keyOf(s)}">
+    <button class="row" data-picked="${on}" data-key="${esc(keyOf(s))}">
       <span class="mark">✓</span>
       <span class="when num">${hhmm(toDate(s.start))}
         <span style="display:block;font-size:11.5px;font-weight:400;color:var(--muted)">
           ${end ? "～"+end : ""}</span></span>
       <span class="body">
-        <span class="title">${s.movie}</span>
-        <span class="meta">${dayLabel(s.actual_date||s.date)}　${s.cinema}</span>
+        <span class="title">${esc(s.movie)}</span>
+        <span class="meta">${dayLabel(s.actual_date||s.date)}　${esc(s.cinema)}</span>
         ${badgeHtml(s)}
       </span>
     </button>`;
@@ -537,11 +575,11 @@ function renderPlan(){
         <div class="rail num">${hhmm(toDate(s.start))}
           <span class="end">${end ? "～"+end : ""}</span></div>
         <div class="card">
-          <div class="title">${s.movie}</div>
-          <div class="meta">${s.cinema}${
+          <div class="title">${esc(s.movie)}</div>
+          <div class="meta">${esc(s.cinema)}${
             badges.length ? "　"+badges.join("、") : ""}${
             s.runtime_minutes ? "　"+s.runtime_minutes+" 分鐘" : ""}</div>
-          <button class="drop" data-key="${keyOf(s)}">移除</button>
+          <button class="drop" data-key="${esc(keyOf(s))}">移除</button>
         </div>
       </div>`;
     });
@@ -643,7 +681,12 @@ fetch("showtimes.json")
       `${dayLabel(days[0])} ～ ${dayLabel(days[days.length-1])}`;
 
     // 預設選今天，沒有今天就選第一天
-    const today = new Date().toISOString().slice(0,10);
+    //
+    // 注意：不能用 toISOString()，那是 UTC 時間，
+    // 台灣清晨 8 點前會算成「昨天」。
+    // 這裡明確指定用台灣時區來判斷今天是幾號。
+    const today = new Intl.DateTimeFormat("en-CA",
+      { timeZone:"Asia/Taipei" }).format(new Date());
     buildFilters();
     $("fDate").value = days.includes(today) ? today : days[0];
     refreshDependent();
