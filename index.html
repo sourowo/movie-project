@@ -194,8 +194,10 @@ footer p+p{margin-top:8px}
    設定
    ============================================================ */
 
-// 資料來源：跟這個 html 放在同一個資料夾的 json
-const DATA_FILE = "showtimes.json";
+// 資料來源：GitHub Release 的固定檔案。
+// 爬蟲只會覆寫 Release asset，不會把幾 MB 的 JSON 寫進 Git commit。
+// 若此專案搬到別的 GitHub 帳號／repository，請同步修改這個網址。
+const DATA_FILE = "https://github.com/sourowo/movie-project/releases/download/showtimes-data/showtimes.json";
 
 // 同一間影城，兩場之間至少要留幾分鐘（走出廳、上廁所、再進場）
 const BUFFER_SAME = 15;
@@ -674,7 +676,7 @@ $("fText").addEventListener("input", renderResults);
 /* ============================================================
    載入資料
    ============================================================
-   讀跟這個 html 放在同一個資料夾的 showtimes.json。
+   從 GitHub Release 讀取最新的 showtimes.json。
 
    注意：一定要用網址開啟這個頁面（http:// 或 https://），
    直接點兩下開檔案（file://）會被瀏覽器的安全限制擋掉，
@@ -736,7 +738,7 @@ loadData()
     $("results").innerHTML =
       `<p class="empty"><strong>讀不到場次資料</strong>
        ${htmlEsc(err.message)}<br><br>
-       請確認 <code>${htmlEsc(DATA_FILE)}</code> 和這個檔案放在一起，
+       請確認 <code>${htmlEsc(DATA_FILE)}</code> 可公開存取，
        而且是透過網址開啟（不是直接點兩下開檔案）。</p>`;
   });
 </script>
