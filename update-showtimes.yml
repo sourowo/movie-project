@@ -1,0 +1,53 @@
+name: 更新電影場次（不寫入 Git）
+
+on:
+  schedule:
+    # UTC 09:00、11:00＝台灣時間每週三 17:00、19:00。
+    # 多數影城會在週三下午公布週五至隔週四的完整場次。
+    - cron: "0 9,11 * * 3"
+  workflow_dispatch:
+
+# 讓內建 GITHUB_TOKEN 可以建立 Release 和覆寫 asset。
+permissions:
+  contents: write
+
+# 排程與手動執行撞期時，只保留最新的一次，避免同時覆寫同一個 asset。
+concurrency:
+  group: update-showtimes
+  cancel-in-progress: false
+
+jobs:
+  scrape-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 取得爬蟲程式
+        uses: actions/checkout@v4
+
+      - name: 安裝 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安裝相依套件
+        run: pip install -r requirements.txt
+
+      - name: 爬取並產生場次 JSON
+        run: python all_showtimes.py
+
+      - name: 檢查產出
+        run: |
+          python -c "import json; data=json.load(open('showtimes.json', encoding='utf-8')); assert isinstance(data, list) and data, 'showtimes.json 是空的或格式不正確'; print(f'{len(data)} 筆場次')"
+
+      - name: 建立固定資料 Release（首次才會執行）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view showtimes-data >/dev/null 2>&1 || gh release create showtimes-data --title "最新電影場次資料" --notes "由排程自動更新；此檔案不寫入 Git 歷史。"
+
+      - name: 覆寫 Release JSON
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload showtimes-data showtimes.json --clobber
