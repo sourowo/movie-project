@@ -194,10 +194,12 @@ footer p+p{margin-top:8px}
    設定
    ============================================================ */
 
-// 資料來源：GitHub Release 的固定檔案。
-// 爬蟲只會覆寫 Release asset，不會把幾 MB 的 JSON 寫進 Git commit。
+// 資料來源：GitHub Release 的固定 JavaScript asset。
+// 爬蟲只會覆寫 Release asset，不會把幾 MB 的資料寫進 Git commit。
+// Release JSON 無法跨網域 fetch；用 script 載入則不受該限制。
 // 若此專案搬到別的 GitHub 帳號／repository，請同步修改這個網址。
-const DATA_FILE = "https://github.com/sourowo/movie-project/releases/download/showtimes-data/showtimes.json";
+const DATA_FILE = "https://github.com/sourowo/movie-project/releases/download/showtimes-data/showtimes.js";
+const DATA_GLOBAL = "__MOVIE_SHOWTIMES__";
 
 // 同一間影城，兩場之間至少要留幾分鐘（走出廳、上廁所、再進場）
 const BUFFER_SAME = 15;
@@ -686,10 +688,25 @@ $("fText").addEventListener("input", renderResults);
 ============================================================ */
 
 async function loadData(){
-  // 加上時間戳，避免瀏覽器拿到快取的舊資料
-  const r = await fetch(`${DATA_FILE}?t=${Date.now()}`);
-  if(!r.ok) throw new Error(`讀不到 ${DATA_FILE}（${r.status}）`);
-  return { data: await r.json(), from: DATA_FILE };
+  // GitHub Release asset 不能跨網域 fetch JSON，改用 script 載入。
+  // showtimes.js 只會把資料指定給 window.__MOVIE_SHOWTIMES__。
+  delete window[DATA_GLOBAL];
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = `${DATA_FILE}?t=${Date.now()}`;
+    script.async = true;
+    script.onload = () => {
+      const data = window[DATA_GLOBAL];
+      script.remove();
+      if(!data) reject(new Error(`讀不到 ${DATA_FILE} 的資料內容`));
+      else resolve({ data, from: DATA_FILE });
+    };
+    script.onerror = () => {
+      script.remove();
+      reject(new Error(`讀不到 ${DATA_FILE}`));
+    };
+    document.head.appendChild(script);
+  });
 }
 
 // JSON 可能是純陣列，也可能包在物件裡，兩種都接
