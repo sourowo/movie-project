@@ -10,7 +10,7 @@ on:
 
 permissions:
   contents: write
-  
+
 concurrency:
   group: update-showtimes
   cancel-in-progress: false
@@ -54,3 +54,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload showtimes-data showtimes.json showtimes.js --clobber
+
+      # 瀏覽器無法跨網域讀取 Release 附件的內容，
+      # 所以把同一份檔案放到 data 分支，網頁從 raw.githubusercontent.com 讀。
+      # 每次都是全新的單一 commit 並強制覆蓋，不會累積歷史，也不會動到 main。
+      - name: 同步 Release 資料到 data 分支（給網頁讀）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/pub"
+          cp showtimes.json showtimes.js "$RUNNER_TEMP/pub/"
+          cd "$RUNNER_TEMP/pub"
+          git init -q -b data
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add showtimes.json showtimes.js
+          git commit -q -m "場次資料 $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:data
+          echo "已同步到 data 分支"
