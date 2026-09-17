@@ -1352,15 +1352,70 @@ $("fileJson").addEventListener("change", async e => {
   }
 });
 
-fetch(JSON_NAME, {cache:"no-store"})
-  .then(r => { if(!r.ok) throw new Error(`找不到 ${JSON_NAME}`); return r.json(); })
-  .then(d => setData(prepare(d), ""))
-  .catch(err => {
-    $("dataInfo").textContent = "資料載入失敗";
-    const msg = `<p class="empty"><strong>讀不到場次資料</strong>${escHtml(err.message)}<br>
-      請確認 ${JSON_NAME} 和這個檔案放在一起，並透過網址開啟；<br>或按右上角「換資料」手動選檔案。</p>`;
-    $("films").innerHTML = msg; $("results").innerHTML = msg;
-  });
+/* ------------------------------------------------------------
+   讀取場次資料
+   1) GitHub Release（showtimes-data）裡的附件：透過 GitHub API 下載，
+      直接抓 releases/download/... 會被瀏覽器的 CORS 擋掉
+   2) 讀不到時，改讀同資料夾的 showtimes.json（本機測試用）
+   ------------------------------------------------------------ */
+const RELEASE = {
+  owner: "sourowo",
+  repo:  "movie-project",
+  tag:   "showtimes-data",
+  asset: /^showtimes.*\.json(\.gz)?$/i,   // 附件檔名規則
+};
+
+function fmtTime(iso){
+  const d = new Date(iso);
+  return `${dayLabel(new Date(d.getTime()+8*3600e3).toISOString().slice(0,10))} ${hhmm(d)}`;
+}
+async function parseBody(res, name){
+  if(/\.gz$/i.test(name)){
+    if(!("DecompressionStream" in window)) throw new Error("這個瀏覽器無法解壓 .gz");
+    const stream = res.body.pipeThrough(new DecompressionStream("gzip"));
+    return JSON.parse(await new Response(stream).text());
+  }
+  return JSON.parse(await res.text());
+}
+async function loadFromRelease(){
+  const {owner, repo, tag, asset} = RELEASE;
+  const api = `https://api.github.com/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tag)}`;
+  const r = await fetch(api, {headers:{Accept:"application/vnd.github+json"}, cache:"no-store"});
+  if(r.status === 403 || r.status === 429) throw new Error("GitHub API 暫時限制次數，請稍後再試");
+  if(!r.ok) throw new Error(`找不到 Release「${tag}」（${r.status}）`);
+  const rel = await r.json();
+  const list = (rel.assets || []).filter(a => asset.test(a.name));
+  if(!list.length) throw new Error(`Release「${tag}」裡沒有 showtimes*.json 附件`);
+  // 有 .gz 且瀏覽器能解壓就用 .gz（比較小），否則用 .json；同類取最新的
+  const canGz = "DecompressionStream" in window;
+  list.sort((a,b) =>
+    (canGz ? /\.gz$/i.test(b.name) - /\.gz$/i.test(a.name) : /\.gz$/i.test(a.name) - /\.gz$/i.test(b.name)) ||
+    (b.updated_at > a.updated_at ? 1 : -1));
+  const a = list[0];
+  const res = await fetch(a.url, {headers:{Accept:"application/octet-stream"}, cache:"no-store"});
+  if(!res.ok) throw new Error(`下載 ${a.name} 失敗（${res.status}）`);
+  return {rows: prepare(await parseBody(res, a.name)), source:`資料更新 ${fmtTime(a.updated_at)}`};
+}
+async function loadLocal(){
+  const r = await fetch(JSON_NAME, {cache:"no-store"});
+  if(!r.ok) throw new Error(`找不到 ${JSON_NAME}`);
+  return {rows: prepare(await r.json()), source:`來源：${JSON_NAME}`};
+}
+(async () => {
+  const errors = [];
+  for(const load of [loadFromRelease, loadLocal]){
+    try{
+      const {rows, source} = await load();
+      setData(rows, source);
+      if(errors.length) toast(`Release 讀取失敗，改用 ${JSON_NAME}：${errors[0]}`);
+      return;
+    }catch(err){ errors.push(err.message); console.warn(err); }
+  }
+  $("dataInfo").textContent = "資料載入失敗";
+  const msg = `<p class="empty"><strong>讀不到場次資料</strong>${errors.map(escHtml).join("<br>")}<br>
+    可以按右上角「換資料」手動選檔案。</p>`;
+  $("films").innerHTML = msg; $("results").innerHTML = msg;
+})();
 </script>
 </body>
 </html>
