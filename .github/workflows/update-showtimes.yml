@@ -34,7 +34,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 爬取並產生場次 JSON
-        run: python all_showtimes.py
+        run: python -u all_showtimes.py
 
       - name: 檢查產出
         run: |
