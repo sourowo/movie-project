@@ -1354,16 +1354,18 @@ $("fileJson").addEventListener("change", async e => {
 
 /* ------------------------------------------------------------
    讀取場次資料（以 GitHub Release 為主）
-   1) app.py 的 /showtimes.json：由 Python 下載 Release 後轉交，
-      回應標頭 X-Data-Source 會標明 release（最新）或 cache（連不上時的備份）
-   2) 不是透過 app.py 開啟時（例如 GitHub Pages），瀏覽器自己呼叫 GitHub API
-   3) 都失敗才用網站上的 showtimes.json，並標示「不是 Release 資料」
+   瀏覽器直接下載 Release 附件會被 GitHub 的跨網域規則（CORS）擋掉，
+   所以排程在更新 Release 時，也把同一份檔案推到 data 分支
+   （只保留一個 commit，不留歷史）。raw.githubusercontent.com 允許跨網域，
+   雙擊開檔案或放在 GitHub Pages 都讀得到。
+   順序：Release 附件 → data 分支的同一份檔案
    ------------------------------------------------------------ */
 const RELEASE = {
   owner: "sourowo",
   repo:  "movie-project",
   tag:   "showtimes-data",
   asset: /^showtimes.*\.json(\.gz)?$/i,
+  mirror: "https://raw.githubusercontent.com/sourowo/movie-project/data/showtimes.json",
 };
 
 function fmtTime(iso){
@@ -1379,94 +1381,60 @@ async function parseBody(res, name){
   }
   return JSON.parse(await res.text());
 }
-// 1) 本機 app.py
-async function loadFromServer(){
-  let r;
-  try{ r = await fetch(JSON_NAME, {cache:"no-store"}); }
-  catch(e){ throw new Error(`無法連到本機伺服器（${e.message}）`); }
-  const src = r.headers.get("X-Data-Source");
-  if(!r.ok){
-    let msg = `${JSON_NAME} 回應 ${r.status}`;
-    try{ msg = (await r.json()).error || msg; }catch(e){}
-    return {ok:false, viaApp: !!src || r.status === 502, error: msg};
+async function getJson(url, headers){
+  const r = await fetch(url, {headers, cache:"no-store"});
+  return r;
+}
+async function loadData(){
+  const {owner, repo, tag, asset, mirror} = RELEASE;
+  const errors = [];
+  let updated = "", assetInfo = null;
+
+  // 1) 問 GitHub API：Release 的附件與更新時間（這一步允許跨網域）
+  try{
+    const r = await getJson(`https://api.github.com/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tag)}`,
+      {Accept:"application/vnd.github+json"});
+    if(r.status === 403 || r.status === 429) throw new Error("GitHub API 次數暫時用完");
+    if(!r.ok) throw new Error(`找不到 Release「${tag}」（${r.status}）`);
+    const rel = await r.json();
+    const list = (rel.assets||[]).filter(a => asset.test(a.name))
+      .sort((a,b) => b.updated_at > a.updated_at ? 1 : b.updated_at < a.updated_at ? -1 : 0);
+    if(!list.length) throw new Error(`Release 裡沒有 showtimes*.json（現有：${(rel.assets||[]).map(a=>a.name).join("、")||"無"}）`);
+    assetInfo = list[0]; updated = assetInfo.updated_at;
+  }catch(e){ errors.push(e.message); }
+
+  // 2) 直接下載 Release 附件（多數瀏覽器會被 CORS 擋，擋到就換下一步）
+  if(assetInfo){
+    try{
+      const r = await getJson(assetInfo.url, {Accept:"application/octet-stream"});
+      if(!r.ok) throw new Error(r.status);
+      return {rows: prepare(await parseBody(r, assetInfo.name)), label:`Release 資料 更新於 ${fmtTime(updated)}`};
+    }catch(e){ console.info("Release 附件無法直接下載，改用 data 分支", e); }
   }
-  const rows = prepare(await r.json());
-  return {
-    ok:true, rows, viaApp: !!src, src,
-    updated: r.headers.get("X-Data-Updated") || "",
-    error: decodeURIComponent(r.headers.get("X-Data-Error") || ""),
-  };
-}
-// 2) 瀏覽器直接讀 Release
-async function loadFromRelease(){
-  const {owner, repo, tag, asset} = RELEASE;
-  const api = `https://api.github.com/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tag)}`;
-  let r;
-  try{ r = await fetch(api, {headers:{Accept:"application/vnd.github+json"}, cache:"no-store"}); }
-  catch(e){ throw new Error("連不到 GitHub API"); }
-  if(r.status === 403 || r.status === 429) throw new Error("GitHub API 次數暫時用完");
-  if(!r.ok) throw new Error(`找不到 Release「${tag}」（${r.status}）`);
-  const rel = await r.json();
-  const list = (rel.assets || []).filter(a => asset.test(a.name))
-    .sort((a,b) => b.updated_at > a.updated_at ? 1 : b.updated_at < a.updated_at ? -1 : /\.gz$/i.test(a.name) - /\.gz$/i.test(b.name));
-  if(!list.length){
-    const names = (rel.assets||[]).map(a => a.name).join("、") || "沒有附件";
-    throw new Error(`Release 裡找不到 showtimes*.json（現有：${names}）`);
+
+  // 3) data 分支上的同一份檔案
+  try{
+    const r = await getJson(mirror);
+    if(r.status === 404) throw new Error("data 分支上還沒有 showtimes.json，請先在排程加上同步步驟");
+    if(!r.ok) throw new Error(`讀取 data 分支失敗（${r.status}）`);
+    return {rows: prepare(await r.json()), label:`Release 資料${updated ? ` 更新於 ${fmtTime(updated)}` : ""}`};
+  }catch(e){
+    errors.push(e instanceof TypeError ? "連不到 GitHub，請檢查網路" : e.message);
   }
-  const a = list[0];
-  let res;
-  try{ res = await fetch(a.url, {headers:{Accept:"application/octet-stream"}, cache:"no-store"}); }
-  catch(e){ throw new Error(`下載 ${a.name} 被瀏覽器的跨網域限制擋下，請改用 app.py 開啟`); }
-  if(!res.ok) throw new Error(`下載 ${a.name} 失敗（${res.status}）`);
-  return {rows: prepare(await parseBody(res, a.name)), updated: a.updated_at};
-}
-function showInfoState(stale){
-  $("dataInfo").style.color = stale ? "var(--tight)" : "";
-}
-function showLoadError(errors){
-  $("dataInfo").textContent = "讀不到 Release 場次資料";
-  showInfoState(true);
-  const msg = `<p class="empty"><strong>讀不到 Release 場次資料</strong>${errors.map(escHtml).join("<br>")}<br>
-    請確認網路連線，或按右上角「換資料」手動選檔案。</p>`;
-  $("films").innerHTML = msg; $("results").innerHTML = msg;
+  throw errors;
 }
 (async () => {
-  const errors = [];
-  let local = null;
-  try{ local = await loadFromServer(); }catch(e){ errors.push(e.message); }
-
-  // app.py 已經處理好 Release
-  if(local?.viaApp){
-    if(local.ok){
-      const when = fmtTime(local.updated);
-      if(local.src === "cache"){
-        setData(local.rows, `⚠ 連不上 Release，顯示上次下載的資料${when ? `（${when}）` : ""}`);
-        showInfoState(true);
-        toast(`Release 讀取失敗：${local.error || "網路問題"}`);
-      }else{
-        setData(local.rows, `Release 資料${when ? ` 更新於 ${when}` : ""}`);
-      }
-    }else{
-      showLoadError([local.error]);
-    }
-    return;
-  }
-
-  // 不是透過 app.py：瀏覽器自己讀 Release
   try{
-    const rel = await loadFromRelease();
-    setData(rel.rows, `Release 資料 更新於 ${fmtTime(rel.updated)}`);
-    return;
-  }catch(e){ errors.push(e.message); console.warn(e); }
-
-  if(local?.ok){
-    setData(local.rows, `⚠ 不是 Release 資料（${JSON_NAME}，可能過期）`);
-    showInfoState(true);
-    toast(errors.at(-1));
-    return;
+    const {rows, label} = await loadData();
+    setData(rows, label);
+  }catch(errors){
+    const list = Array.isArray(errors) ? errors : [String(errors)];
+    $("dataInfo").textContent = "讀不到 Release 場次資料";
+    $("dataInfo").style.color = "var(--tight)";
+    const msg = `<p class="empty"><strong>讀不到 Release 場次資料</strong>${list.map(escHtml).join("<br>")}<br>
+      也可以按右上角「換資料」，選從 Release 下載的檔案。</p>`;
+    $("films").innerHTML = msg; $("results").innerHTML = msg;
   }
-  if(local && !local.ok) errors.push(local.error);
-  showLoadError(errors);
 })();
 </script>
 </body>
