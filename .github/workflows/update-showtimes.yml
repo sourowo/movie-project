@@ -2,8 +2,11 @@ name: 更新電影場次（不寫入 Git）
 
 on:
   schedule:
-    # 台灣時間每週三 17:13、19:13
-    - cron: "13 17,19 * * 3"
+    # 台灣時間每週三 19:13
+    - cron: "13 19 * * 3"
+      timezone: "Asia/Taipei"
+    # 台灣時間每週五 08:03
+    - cron: "3 8 * * 5"
       timezone: "Asia/Taipei"
 
   workflow_dispatch:
