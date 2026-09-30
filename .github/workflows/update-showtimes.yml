@@ -22,6 +22,10 @@ jobs:
   scrape-and-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # cron 的 timezone 只影響觸發時間；這行讓爬蟲裡的 datetime.now() 也是台灣時間
+      TZ: Asia/Taipei
+      PYTHONIOENCODING: utf-8
 
     steps:
       - name: 取得爬蟲程式
@@ -36,12 +40,58 @@ jobs:
       - name: 安裝相依套件
         run: pip install -r requirements.txt
 
+      - name: 顯示執行環境資訊
+        run: |
+          echo "目前時間（台灣）：$(date '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "對外 IP：$(curl -s --max-time 10 https://api.ipify.org || echo 取得失敗)"
+
       - name: 爬取並產生場次 JSON
-        run: python -u all_showtimes.py
+        run: python -u all_showtimes.py 2>&1 | tee scraper.log; exit ${PIPESTATUS[0]}
 
       - name: 檢查產出
         run: |
-          python -c "import json; data=json.load(open('showtimes.json', encoding='utf-8')); assert isinstance(data, list) and data, 'showtimes.json 是空的或格式不正確'; print(f'{len(data)} 筆場次')"
+          if [ ! -f showtimes.json ]; then
+            echo "::error::找不到 showtimes.json，爬蟲可能沒有寫出檔案"
+            exit 1
+          fi
+          ls -la showtimes.json
+          echo "--- 檔案開頭 ---"
+          head -c 800 showtimes.json; echo
+          echo "----------------"
+          python - <<'EOF'
+          import json, sys
+          try:
+              data = json.load(open('showtimes.json', encoding='utf-8'))
+          except json.JSONDecodeError as e:
+              print(f'::error::showtimes.json 不是合法的 JSON：{e}')
+              sys.exit(1)
+
+          print('最外層型別：', type(data).__name__)
+          if isinstance(data, dict):
+              print('::error::最外層是物件而不是陣列，keys =', list(data.keys()))
+              sys.exit(1)
+          if not isinstance(data, list):
+              print('::error::最外層不是陣列')
+              sys.exit(1)
+          if not data:
+              print('::error::showtimes.json 是空陣列（爬到 0 筆），請看上方爬蟲 log 或下載 debug-output')
+              sys.exit(1)
+
+          print(f'{len(data)} 筆場次')
+          print('第一筆範例：', json.dumps(data[0], ensure_ascii=False)[:300])
+          EOF
+
+      - name: 失敗時保留爬蟲產出以便除錯
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-output
+          path: |
+            showtimes.json
+            scraper.log
+            *.html
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: 產生可供 GitHub Pages 載入的資料檔
         run: |
@@ -72,6 +122,6 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add showtimes.json showtimes.js
-          git commit -q -m "場次資料 $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git commit -q -m "場次資料 $(date '+%Y-%m-%d %H:%M %Z')"
           git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:data
           echo "已同步到 data 分支"
