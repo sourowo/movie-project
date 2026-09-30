@@ -2,8 +2,10 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import json
+import sys
 import time
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 # 借用 normalize.py 的整理功能（跨夜修正、拆 version、算結束時間）
 import normalize
@@ -14,12 +16,18 @@ import normalize
 # ==========================================
 
 # 自動抓今天～未來 6 天
-today = datetime.now()
+# 一律用台灣時間。GitHub Actions 的主機是 UTC，
+# 台灣 00:00～07:59 執行時 UTC 還是前一天，會把「今天」判斷錯。
+today = datetime.now(ZoneInfo("Asia/Taipei"))
 
 START_DATE = today.strftime("%Y%m%d")
 END_DATE = (today + timedelta(days=6)).strftime("%Y%m%d")
 
 OUTPUT_FILE = "showtimes.json"
+
+# 今天的日期字串。
+# 開眼的「今天」頁面網址不帶日期，所以要拿這個來判斷。
+TODAY = START_DATE
 
 
 # ------------------------------------------
@@ -101,8 +109,15 @@ dates = get_dates(START_DATE, END_DATE)
 
 session = requests.Session()
 
+# 明確表明身分，而不是假裝成一般瀏覽器。
+# 這樣對方如果對抓取有意見，可以直接透過 GitHub 找到我，
+# 而不是二話不說把 IP 封掉。
+
 session.headers.update({
-    "User-Agent": "Mozilla/5.0"
+    "User-Agent": (
+        "MoviePlanner/1.0 (personal non-commercial project; "
+        "https://github.com/sourowo/movie-project)"
+    )
 })
 
 
@@ -171,6 +186,36 @@ def get_theaters(region_id, region_name):
 
 
 # ==========================================
+# 組場次頁網址
+# ==========================================
+#
+# 開眼的日期選單長這樣：
+#
+#   今天      → /showtime/t02g04/a01/          （沒有日期）
+#   09/16     → /showtime/t02g04/a01/20260916/
+#
+# 「今天」是不帶日期的網址。
+#
+# 如果硬把今天的日期組進去（.../20260915/），
+# 對方還是會回 HTTP 200，但頁面裡沒有場次表，
+# 結果就是今天整天抓到 0 筆，而且完全不會報錯。
+#
+# 所以今天要用不帶日期的網址，其他天才加日期。
+
+def build_showtime_url(theater_id, region_id, date):
+
+    base = (
+        f"https://www.atmovies.com.tw/"
+        f"showtime/{theater_id}/{region_id}/"
+    )
+
+    if date == TODAY:
+        return base
+
+    return f"{base}{date}/"
+
+
+# ==========================================
 # 取得單一影城某一天的場次
 # ==========================================
 
@@ -189,9 +234,10 @@ def scrape_theater(theater, date):
     region_name = theater["region"]
     cinema_name = theater["cinema"]
 
-    url = (
-        f"https://www.atmovies.com.tw/"
-        f"showtime/{theater_id}/{region_id}/{date}/"
+    url = build_showtime_url(
+        theater_id,
+        region_id,
+        date
     )
 
     response = session.get(url, timeout=20)
@@ -215,6 +261,43 @@ def scrape_theater(theater, date):
         response.text,
         "html.parser"
     )
+
+
+    # ======================================
+    # 確認頁面日期
+    # ======================================
+    #
+    # 頁面上會有「2026/09/15 (二)」這種標題。
+    #
+    # 跟我們要的日期比對一下，確定沒有拿錯天。
+    # 主要是防跨午夜執行：程式跑到半夜 12 點後，
+    # 網站的「今天」已經換日，我們的 TODAY 還停在昨天。
+    #
+    # 找不到日期標題就不擋，可能只是版型不同。
+
+    page_date_match = re.search(
+        r"(\d{4})/(\d{2})/(\d{2})\s*\(",
+        soup.get_text(" ", strip=True)
+    )
+
+    if page_date_match:
+
+        page_date = "".join(
+            page_date_match.groups()
+        )
+
+        if page_date != date:
+
+            print(
+                "   ⚠ 頁面日期",
+                page_date,
+                "與預期",
+                date,
+                "不符，跳過"
+            )
+
+            return []
+
 
     results = []
 
@@ -571,6 +654,17 @@ for day_number, date in enumerate(dates, start=1):
 
         continue
 
+    # 前面的日子也一筆都沒有 → 不是「還沒公布」，是爬蟲出問題。
+    # 繼續爬也沒用，停下來，後面會報錯。
+    if not all_showtimes:
+
+        print()
+        print("=" * 60)
+        print(f"連續 {day_number} 天都是 0 筆，這不正常，停止爬取。")
+        print("=" * 60)
+
+        break
+
     # 走到這裡 = 整天掃完、請求也都正常、就是真的沒場次
     # → 後面的日期一定也還沒公布，直接停止
 
@@ -601,6 +695,15 @@ for day_number, date in enumerate(dates, start=1):
 #   3. 用片長算出估計的結束時間
 #
 # 詳細做法都寫在 normalize.py 裡面。
+
+if not all_showtimes:
+
+    print()
+    print("❌ 一筆場次都沒抓到，不寫出 showtimes.json。")
+    print("   可能是網址規則或頁面結構變了，請往上看各影城的場次數。")
+
+    sys.exit(1)
+
 
 print()
 print("正在整理資料...")
